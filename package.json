@@ -1,0 +1,19 @@
+{
+  "name": "sequenceiq",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SequenceIQ wrapped as an Android app via Capacitor",
+  "scripts": {
+    "build": "echo 'static site — nothing to compile'"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/filesystem": "^6.0.1",
+    "@capacitor/splash-screen": "^6.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^6.1.2"
+  }
+}
