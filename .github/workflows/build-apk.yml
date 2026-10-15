@@ -1,0 +1,117 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install JS dependencies
+        run: npm install
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Add Android platform (fresh each build)
+        run: |
+          rm -rf android
+          npx cap add android
+
+      - name: Patch AndroidManifest for storage export permissions
+        run: |
+          python3 - "android/app/src/main/AndroidManifest.xml" << 'EOF'
+          import re, sys
+          path = sys.argv[1]
+          with open(path, 'r', encoding='utf-8') as f:
+              xml = f.read()
+
+          # Allow direct writes to the public Downloads folder on Android 10-12
+          if 'requestLegacyExternalStorage' not in xml:
+              xml = re.sub(r'(<application\b)', r'\1\n        android:requestLegacyExternalStorage="true"', xml, count=1)
+
+          # Storage permissions (scoped by maxSdkVersion since 33+ doesn't need/allow them)
+          if 'WRITE_EXTERNAL_STORAGE' not in xml:
+              perms = (
+                  '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n'
+                  '    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n'
+              )
+              xml = xml.replace('</manifest>', perms + '</manifest>')
+
+          with open(path, 'w', encoding='utf-8') as f:
+              f.write(xml)
+          print("AndroidManifest patched for storage export.")
+          EOF
+
+      - name: Generate app icon & splash screen from resources/
+        run: |
+          if ls resources/*.png >/dev/null 2>&1; then
+            npx @capacitor/assets generate --android \
+              --splashBackgroundColor "#0a0d14" \
+              --splashBackgroundColorDark "#0a0d14" \
+              --iconBackgroundColor "#0a0d14" \
+              --iconBackgroundColorDark "#0a0d14"
+          else
+            echo "No PNGs in resources/ — keeping Capacitor defaults."
+          fi
+
+      - name: Force dark background on Android 12+ system splash screen
+        run: |
+          python3 << 'EOF'
+          import glob, re
+
+          # @capacitor/assets should already set this via --splashBackgroundColor,
+          # but Android 12+'s system splash screen reads windowSplashScreenBackground
+          # from res/values*/styles.xml — this is a safety net so it never falls back to white.
+          for path in glob.glob('android/app/src/main/res/values*/styles.xml') + glob.glob('android/app/src/main/res/values*/colors.xml'):
+              with open(path, 'r', encoding='utf-8') as f:
+                  content = f.read()
+              original = content
+              content = re.sub(
+                  r'(name="windowSplashScreenBackground">)#[0-9A-Fa-f]{6,8}(<)',
+                  r'\g<1>#0a0d14\g<2>',
+                  content
+              )
+              content = re.sub(
+                  r'(name="splashBackgroundColor">)#[0-9A-Fa-f]{6,8}(<)',
+                  r'\g<1>#0a0d14\g<2>',
+                  content
+              )
+              if content != original:
+                  with open(path, 'w', encoding='utf-8') as f:
+                      f.write(content)
+                  print(f"Patched {path}")
+          EOF
+
+      - name: Sync web assets into Android project
+        run: npx cap sync android
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sequenceiq-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
